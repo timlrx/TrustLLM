@@ -98,6 +98,7 @@ class OpenAILLMGeneration:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         max_new_tokens: int = 512,
+        max_rows: Optional[int] = None,
         debug: bool = False,
         group_size: int = 8,
     ):
@@ -111,6 +112,7 @@ class OpenAILLMGeneration:
         :param api_key: OpenAI API key (or set api_key env var)
         :param base_url: Custom base URL for OpenAI-compatible APIs
         :param max_new_tokens: Maximum tokens to generate
+        :param max_rows: Maximum number of rows to process (None for all rows)
         :param debug: Enable debug mode
         :param group_size: Number of parallel requests for processing
         """
@@ -124,6 +126,7 @@ class OpenAILLMGeneration:
         self.model_name = model_name
         self.data_path = data_path
         self.max_new_tokens = max_new_tokens
+        self.max_rows = max_rows
         self.debug = debug
         self.group_size = group_size
 
@@ -150,6 +153,8 @@ class OpenAILLMGeneration:
             print(f"Test type: {self.test_type}")
             if self.dataset:
                 print(f"Specific dataset: {self.dataset}")
+            if self.max_rows:
+                print(f"Max rows to process: {self.max_rows}")
 
     @staticmethod
     def get_available_datasets(test_type: Union[TestType, str]) -> list:
@@ -239,17 +244,28 @@ class OpenAILLMGeneration:
         with open(data_path, "r") as f:
             original_data = json.load(f)
 
+        # Apply max_rows limit if specified
+        if self.max_rows and len(original_data) > self.max_rows:
+            original_data = original_data[: self.max_rows]
+            if self.debug:
+                print(f"Limited dataset to first {self.max_rows} rows for {filename}")
+
         # Load existing results if available
         if os.path.exists(save_path):
             with open(save_path, "r") as f:
                 saved_data = json.load(f)
+                # Also apply max_rows limit to saved data to ensure consistency
+                if self.max_rows and len(saved_data) > self.max_rows:
+                    saved_data = saved_data[: self.max_rows]
         else:
             saved_data = original_data.copy()
 
+        total_rows = len(saved_data)
+
         # Process in groups for parallel execution
         for i in tqdm(
-            range(0, len(saved_data), self.group_size),
-            desc=f"Processing {filename}",
+            range(0, total_rows, self.group_size),
+            desc=f"Processing {filename} ({total_rows} rows)",
             leave=False,
         ):
             group_data = saved_data[i : i + self.group_size]
