@@ -1,38 +1,113 @@
-"""
-OpenAI-focused LLM Generation for TrustLLM Evaluation
-Simplified implementation that focuses only on OpenAI API integration
-"""
-
 import time
 import os
 import json
 import threading
 import traceback
+from enum import Enum
+from typing import Optional, Union
 from dotenv import load_dotenv
-from tqdm import tqdm
 from openai import OpenAI
+from tqdm import tqdm
 
 load_dotenv()
+
+
+class TestType(Enum):
+    """Supported test types in TrustLLM."""
+
+    ETHICS = "ethics"
+    PRIVACY = "privacy"
+    FAIRNESS = "fairness"
+    TRUTHFULNESS = "truthfulness"
+    ROBUSTNESS = "robustness"
+    SAFETY = "safety"
+
+
+class EthicsDataset(Enum):
+    """Ethics evaluation datasets."""
+
+    AWARENESS = "awareness.json"
+    EXPLICIT_MORALCHOICE = "explicit_moralchoice.json"
+    IMPLICIT_ETHICS = "implicit_ETHICS.json"
+    IMPLICIT_SOCIALCHEMISTRY101 = "implicit_SocialChemistry101.json"
+
+
+class PrivacyDataset(Enum):
+    """Privacy evaluation datasets."""
+
+    PRIVACY_AWARENESS_CONFAIDE = "privacy_awareness_confAIde.json"
+    PRIVACY_AWARENESS_QUERY = "privacy_awareness_query.json"
+    PRIVACY_LEAKAGE = "privacy_leakage.json"
+
+
+class FairnessDataset(Enum):
+    """Fairness evaluation datasets."""
+
+    DISPARAGEMENT = "disparagement.json"
+    PREFERENCE = "preference.json"
+    STEREOTYPE_AGREEMENT = "stereotype_agreement.json"
+    STEREOTYPE_QUERY_TEST = "stereotype_query_test.json"
+    STEREOTYPE_RECOGNITION = "stereotype_recognition.json"
+
+
+class TruthfulnessDataset(Enum):
+    """Truthfulness evaluation datasets."""
+
+    EXTERNAL = "external.json"
+    HALLUCINATION = "hallucination.json"
+    GOLDEN_ADVFACTUALITY = "golden_advfactuality.json"
+    INTERNAL = "internal.json"
+    SYCOPHANCY = "sycophancy.json"
+
+
+class RobustnessDataset(Enum):
+    """Robustness evaluation datasets."""
+
+    OOD_DETECTION = "ood_detection.json"
+    OOD_GENERALIZATION = "ood_generalization.json"
+    ADVGLUE = "AdvGLUE.json"
+    ADVINSTRUCTION = "AdvInstruction.json"
+
+
+class SafetyDataset(Enum):
+    """Safety evaluation datasets."""
+
+    JAILBREAK = "jailbreak.json"
+    EXAGGERATED_SAFETY = "exaggerated_safety.json"
+    MISUSE = "misuse.json"
+
+
+# Type alias for dataset enums
+DatasetType = Union[
+    EthicsDataset,
+    PrivacyDataset,
+    FairnessDataset,
+    TruthfulnessDataset,
+    RobustnessDataset,
+    SafetyDataset,
+]
 
 
 class OpenAILLMGeneration:
     def __init__(
         self,
-        test_type,
-        data_path,
-        model_name,
-        api_key=None,
-        base_url=None,
-        max_new_tokens=512,
-        debug=False,
-        group_size=8,
+        test_type: Union[TestType, str],
+        data_path: str,
+        model_name: str,
+        dataset: Optional[Union[DatasetType, str]] = None,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        max_new_tokens: int = 512,
+        debug: bool = False,
+        group_size: int = 8,
     ):
         """
         Initialize OpenAI LLM Generation for TrustLLM evaluation.
 
-        :param test_type: Type of test to run (ethics, privacy, fairness, truthfulness, robustness, safety)
+        :param test_type: Type of test to run (TestType enum or string)
         :param data_path: Path to the TrustLLM dataset
         :param model_name: OpenAI model name (e.g., 'gpt-4o-mini', 'gpt-4', 'gpt-3.5-turbo')
+        :param dataset: Optional specific dataset to run (DatasetType enum or string)
         :param api_key: OpenAI API key (or set api_key env var)
         :param base_url: Custom base URL for OpenAI-compatible APIs
         :param max_new_tokens: Maximum tokens to generate
@@ -40,12 +115,22 @@ class OpenAILLMGeneration:
         :param group_size: Number of parallel requests for processing
         """
 
+        # Handle enum or string inputs
+        self.test_type = (
+            test_type.value if isinstance(test_type, TestType) else test_type
+        )
+        self.dataset = dataset.value if hasattr(dataset, "value") else dataset
+
         self.model_name = model_name
-        self.test_type = test_type
         self.data_path = data_path
         self.max_new_tokens = max_new_tokens
         self.debug = debug
         self.group_size = group_size
+
+        # Validate test_type
+        valid_tests = [t.value for t in TestType]
+        if self.test_type not in valid_tests:
+            raise ValueError(f"Invalid test_type. Must be one of: {valid_tests}")
 
         # Initialize OpenAI client
         api_key = api_key or os.getenv("api_key")
@@ -62,6 +147,25 @@ class OpenAILLMGeneration:
 
         if self.debug:
             print(f"Initialized OpenAI client for model: {self.model_name}")
+            print(f"Test type: {self.test_type}")
+            if self.dataset:
+                print(f"Specific dataset: {self.dataset}")
+
+    @staticmethod
+    def get_available_datasets(test_type: Union[TestType, str]) -> list:
+        """Get available datasets for a specific test type."""
+        test_name = test_type.value if isinstance(test_type, TestType) else test_type
+
+        dataset_mapping = {
+            TestType.ETHICS.value: list(EthicsDataset),
+            TestType.PRIVACY.value: list(PrivacyDataset),
+            TestType.FAIRNESS.value: list(FairnessDataset),
+            TestType.TRUTHFULNESS.value: list(TruthfulnessDataset),
+            TestType.ROBUSTNESS.value: list(RobustnessDataset),
+            TestType.SAFETY.value: list(SafetyDataset),
+        }
+
+        return dataset_mapping.get(test_name, [])
 
     def _generation_openai(self, prompt, temperature=0.0):
         """
@@ -180,7 +284,7 @@ class OpenAILLMGeneration:
 
     def _run_task(self, base_dir, file_config, key_name="prompt"):
         """
-        Run evaluation task on all files in a directory.
+        Run evaluation task on files in a directory.
 
         :param base_dir: Base directory containing test files
         :param file_config: Configuration for file processing
@@ -195,7 +299,25 @@ class OpenAILLMGeneration:
         results_dir = os.path.join("generation_results", self.model_name, section)
         os.makedirs(results_dir, exist_ok=True)
 
-        # Process all JSON files in the directory
+        # If specific dataset is provided, only process that file
+        if self.dataset:
+            if self.dataset in file_config:
+                filename = self.dataset
+                data_path = os.path.join(base_dir, filename)
+                save_path = os.path.join(results_dir, filename)
+
+                if os.path.exists(data_path):
+                    print(f"Processing specific dataset: {filename}")
+                    self.process_file(data_path, save_path, file_config, key_name)
+                else:
+                    print(f"Dataset file {filename} not found in {base_dir}")
+            else:
+                print(
+                    f"Dataset {self.dataset} not found in configuration for {section}"
+                )
+            return
+
+        # Process all JSON files in the directory if no specific dataset
         json_files = [f for f in os.listdir(base_dir) if f.endswith(".json")]
 
         for filename in tqdm(json_files, desc=f"Processing {section} files"):
